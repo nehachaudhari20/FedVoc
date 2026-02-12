@@ -24,7 +24,7 @@
 
 ---
 
-## 🏗️ Repository Structure
+## 🗃️ Repository Structure
 
 ```bash
 fedvoc/
