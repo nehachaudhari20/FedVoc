@@ -1,19 +1,29 @@
 import torch
 import torch.nn as nn
+from transformers import DistilBertConfig, DistilBertModel
 
-class SharedTransformer(nn.Module):
-    def __init__(self, d_model=128):
+
+class DistilBertLM(nn.Module):
+    def __init__(self, vocab_size, d_model=768):
         super().__init__()
 
-        self.encoder = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(
-                d_model=d_model,
-                nhead=4,
-                dim_feedforward=256,
-                batch_first=True
-            ),
-            num_layers=2
+        config = DistilBertConfig(
+            vocab_size=vocab_size,
+            dim=d_model,
+            hidden_dim=4 * d_model,
+            n_layers=6,          # FULL DistilBERT
+            n_heads=12,
+            dropout=0.1,
         )
 
-    def forward(self, x):
-        return self.encoder(x)
+        self.bert = DistilBertModel(config)
+        self.lm_head = nn.Linear(d_model, vocab_size)
+
+    def forward(self, input_ids, attention_mask=None):
+        outputs = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask
+        )
+        hidden_states = outputs.last_hidden_state
+        logits = self.lm_head(hidden_states)
+        return logits

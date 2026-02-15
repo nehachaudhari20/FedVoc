@@ -1,9 +1,10 @@
 import copy
-from models.base_model import SharedTransformer
+from models.base_model import DistilBertLM
+
 
 class Server:
-    def __init__(self, d_model=128):
-        self.global_model = SharedTransformer(d_model)
+    def __init__(self, vocab_size):
+        self.global_model = DistilBertLM(vocab_size)
 
     def aggregate(self, client_weights):
         new_state = copy.deepcopy(self.global_model.state_dict())

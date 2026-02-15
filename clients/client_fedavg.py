@@ -1,66 +1,85 @@
 import torch
 import torch.nn as nn
-import copy
+import torch.optim as optim
+from models.base_model import DistilBertLM
+from torch.nn.utils.rnn import pad_sequence
+
 
 class FedAvgClient:
-    def __init__(self, tokenizer, texts, d_model=128):
+    def __init__(self, tokenizer, texts, device="cpu"):
         self.tokenizer = tokenizer
         self.texts = texts
-        self.device = torch.device("cpu")
+        self.device = device
 
-        self.d_model = d_model
-        self.embedding = None
-        self.lm_head = None
-
-        self.criterion = nn.CrossEntropyLoss()
+        self.vocab_size = tokenizer.get_vocab_size()
+        self.model = DistilBertLM(self.vocab_size).to(device)
 
     def initialize_local_model(self, global_model):
-        # Create fresh copy of global model
-        self.model = copy.deepcopy(global_model)
+        self.model.load_state_dict(global_model.state_dict())
 
-        vocab_size = self.tokenizer.get_vocab_size()
+    def _prepare_batch(self, texts, max_len=32):
+        input_ids_list = []
 
-        # Local embedding + local LM head
-        self.embedding = nn.Embedding(vocab_size, self.d_model)
-        self.lm_head = nn.Linear(self.d_model, vocab_size)
+        for text in texts:
+            ids = self.tokenizer.encode(text).ids[:max_len]
+            if len(ids) < 2:
+                continue
+            input_ids_list.append(torch.tensor(ids))
 
-        self.optimizer = torch.optim.Adam(
-            self.model.parameters(),
-            lr=1e-3
+        if len(input_ids_list) == 0:
+            return None, None
+
+        padded = pad_sequence(
+            input_ids_list,
+            batch_first=True,
+            padding_value=0
         )
 
-    def encode_batch(self, text, seq_len=32):
-        encoding = self.tokenizer.encode(text)
-        ids = encoding.ids[:seq_len]
+        attention_mask = (padded != 0).long()
 
-        if len(ids) < seq_len:
-            ids += [0] * (seq_len - len(ids))
+        inputs = padded[:, :-1]
+        targets = padded[:, 1:]
 
-        return torch.tensor(ids)
+        return inputs, targets, attention_mask[:, :-1]
 
-    def train_one_epoch(self):
+    def train_one_epoch(self, batch_size=16):
         self.model.train()
+
+        optimizer = optim.Adam(self.model.parameters(), lr=2e-4)
+        criterion = nn.CrossEntropyLoss(ignore_index=0)
+
         total_loss = 0
+        steps = 0
 
-        for text in self.texts[:100]:
-            tokens = self.encode_batch(text).unsqueeze(0)
+        for i in range(0, min(len(self.texts), 800), batch_size):
+            batch_texts = self.texts[i:i + batch_size]
 
-            emb = self.embedding(tokens)
-            out = self.model(emb)
-            logits = self.lm_head(out)
+            inputs, targets, mask = self._prepare_batch(batch_texts)
 
-            loss = self.criterion(
-                logits.view(-1, logits.size(-1)),
-                tokens.view(-1)
+            if inputs is None:
+                continue
+
+            inputs = inputs.to(self.device)
+            targets = targets.to(self.device)
+            mask = mask.to(self.device)
+
+            optimizer.zero_grad()
+
+            logits = self.model(inputs, mask)
+
+            loss = criterion(
+                logits.reshape(-1, self.vocab_size),
+                targets.reshape(-1)
             )
 
-            self.optimizer.zero_grad()
             loss.backward()
-            self.optimizer.step()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            optimizer.step()
 
             total_loss += loss.item()
+            steps += 1
 
-        return total_loss
+        return total_loss / max(steps, 1)
 
     def get_model_weights(self):
-        return copy.deepcopy(self.model.state_dict())
+        return self.model.state_dict()
