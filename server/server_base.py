@@ -1,10 +1,10 @@
 import copy
-from models.base_model import DistilBertLM
+from models.base_model import FedVocModel
 
 
 class Server:
     def __init__(self, vocab_size):
-        self.global_model = DistilBertLM(vocab_size)
+        self.global_model = FedVocModel(vocab_size)
 
     def aggregate(self, client_weights):
         new_state = copy.deepcopy(self.global_model.state_dict())
