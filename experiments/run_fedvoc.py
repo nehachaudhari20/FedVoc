@@ -2,17 +2,22 @@ from utils.data_loader import load_shakespeare_clients
 from tokenizers import Tokenizer
 from clients.client_fedvoc import FedVocClient
 import copy
+from server.server_base import Server
 
 clients_data = load_shakespeare_clients(num_clients=3)
 
+server = Server(vocab_size=3000)
+
 clients = []
 
-for i, (cid, texts) in enumerate(clients_data.items()):
+for i, (cid, data) in enumerate(clients_data.items()):
+
     tokenizer = Tokenizer.from_file(
         f"fed_tokenizers/tokenizer_client_{i}.json"
     )
 
-    client = FedVocClient(tokenizer, texts)
+    client = FedVocClient(tokenizer, data["train"])
+    client.test_texts = data["test"]
     clients.append(client)
 
 # 🔥 Initialize global shared state (adapter + encoder)
@@ -43,4 +48,11 @@ for round in range(8):
 
     global_shared = new_shared
 
-print("\nFedVoc v2 training complete.")
+print("\nFedVoc v2 training complete.")``
+print("\nEvaluating FedVoc v2...")
+
+for i, client in enumerate(clients):
+
+    loss, ppl = client.evaluate(client.test_texts)
+
+    print(f"Client {i} Test Loss: {loss:.4f} | Perplexity: {ppl:.4f}")
