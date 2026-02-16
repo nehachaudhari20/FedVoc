@@ -16,8 +16,8 @@ class FedVocClient:
         self.model = FedVocModel(self.vocab_size).to(device)
 
         # 🔥 Freeze encoder for stability
-        for param in self.model.encoder.parameters():
-            param.requires_grad = False
+        # for param in self.model.encoder.parameters():
+        #     param.requires_grad = False
 
     def initialize_local_adapter(self, global_adapter_state):
         self.model.adapter.load_state_dict(global_adapter_state)
@@ -93,3 +93,31 @@ class FedVocClient:
 
     def get_adapter_weights(self):
         return self.model.adapter.state_dict()
+
+    def get_shared_weights(self):
+        shared_state = {}
+
+        # Adapter weights
+        for key, value in self.model.adapter.state_dict().items():
+            shared_state["adapter." + key] = value
+
+        # Encoder weights
+        for key, value in self.model.encoder.state_dict().items():
+            shared_state["encoder." + key] = value
+
+        return shared_state
+
+    def initialize_shared_weights(self, global_shared_state):
+
+        adapter_state = {}
+        encoder_state = {}
+
+        for key, value in global_shared_state.items():
+            if key.startswith("adapter."):
+                adapter_state[key.replace("adapter.", "")] = value
+            elif key.startswith("encoder."):
+                encoder_state[key.replace("encoder.", "")] = value
+
+        self.model.adapter.load_state_dict(adapter_state)
+        self.model.encoder.load_state_dict(encoder_state)
+

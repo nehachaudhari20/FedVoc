@@ -15,32 +15,32 @@ for i, (cid, texts) in enumerate(clients_data.items()):
     client = FedVocClient(tokenizer, texts)
     clients.append(client)
 
-# Initialize global adapter
-global_adapter = copy.deepcopy(clients[0].model.adapter.state_dict())
+# 🔥 Initialize global shared state (adapter + encoder)
+global_shared = clients[0].get_shared_weights()
 
-print("Starting FedVoc training...")
+print("Starting FedVoc v2 training (adapter + encoder shared)...")
 
 for round in range(8):
     print(f"\n--- Round {round} ---")
 
-    adapter_updates = []
+    shared_updates = []
 
     for client in clients:
-        client.initialize_local_adapter(global_adapter)
+        client.initialize_shared_weights(global_shared)
 
         loss = client.train_one_epoch()
         print("Client loss:", loss)
 
-        adapter_updates.append(client.get_adapter_weights())
+        shared_updates.append(client.get_shared_weights())
 
-    # FedAvg on adapter only
-    new_adapter = copy.deepcopy(global_adapter)
+    # FedAvg on shared components
+    new_shared = copy.deepcopy(global_shared)
 
-    for key in new_adapter.keys():
-        new_adapter[key] = sum(
-            update[key] for update in adapter_updates
-        ) / len(adapter_updates)
+    for key in new_shared.keys():
+        new_shared[key] = sum(
+            update[key] for update in shared_updates
+        ) / len(shared_updates)
 
-    global_adapter = new_adapter
+    global_shared = new_shared
 
-print("\nFedVoc training complete.")
+print("\nFedVoc v2 training complete.")
