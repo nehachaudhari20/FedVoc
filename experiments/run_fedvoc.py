@@ -48,7 +48,7 @@ for round in range(8):
 
     global_shared = new_shared
 
-print("\nFedVoc v2 training complete.")``
+print("\nFedVoc v2 training complete.")
 print("\nEvaluating FedVoc v2...")
 
 for i, client in enumerate(clients):
