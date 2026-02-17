@@ -1,8 +1,9 @@
 from utils.data_loader import load_shakespeare_clients
+from utils.communication import count_parameters
 from tokenizers import Tokenizer
 from clients.client_fedavg import FedAvgClient
 from server.server_base import Server
-import torch
+import matplotlib.pyplot as plt
 
 clients_data = load_shakespeare_clients(num_clients=3)
 
@@ -21,12 +22,15 @@ for cid, data in clients_data.items():
     client.test_texts = data["test"]
     clients.append(client)
 
+round_losses = []
+
 print("Starting TRUE FedAvg baseline with DistilBERT...")
 
 for round in range(8):
     print(f"\n--- Round {round} ---")
 
     client_weights = []
+    total_round_loss = 0
 
     for client in clients:
         client.initialize_local_model(server.global_model)
@@ -34,7 +38,11 @@ for round in range(8):
         loss = client.train_one_epoch()
         print("Client train loss:", loss)
 
+        total_round_loss += loss
         client_weights.append(client.get_model_weights())
+
+    avg_loss = total_round_loss / len(clients)
+    round_losses.append(avg_loss)
 
     server.aggregate(client_weights)
 
@@ -43,3 +51,15 @@ print("\nEvaluating FedAvg baseline...")
 for i, client in enumerate(clients):
     loss, ppl = client.evaluate(client.test_texts)
     print(f"Client {i} Test Loss: {loss:.4f} | Perplexity: {ppl:.4f}")
+
+comm_cost = count_parameters(server.global_model.state_dict())
+print("\nFedAvg communication cost per round:", comm_cost)
+
+plt.plot(round_losses)
+plt.title("FedAvg Convergence")
+plt.xlabel("Rounds")
+plt.ylabel("Average Loss")
+plt.savefig("results/fedavg_convergence.png")
+plt.close()
+
+print("\nConvergence plot saved to results/fedavg_convergence.png")
