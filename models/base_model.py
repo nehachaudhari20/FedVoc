@@ -5,7 +5,7 @@ from models.adapter import LowRankAdapter
 
 
 class FedVocModel(nn.Module):
-    def __init__(self, vocab_size, d_model=768, rank=16):
+    def __init__(self, vocab_size, d_model=768, rank=32):
         super().__init__()
 
         # LOCAL embedding

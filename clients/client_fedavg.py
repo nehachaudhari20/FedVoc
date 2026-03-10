@@ -51,7 +51,7 @@ class FedAvgClient:
         total_loss = 0
         steps = 0
 
-        for i in range(0, min(len(self.texts), 800), batch_size):
+        for i in range(0, min(len(self.texts), 4000), batch_size):
             batch_texts = self.texts[i:i + batch_size]
 
             inputs, targets, mask = self._prepare_batch(batch_texts)

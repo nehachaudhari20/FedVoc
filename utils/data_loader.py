@@ -1,39 +1,80 @@
 from datasets import load_dataset
-from collections import defaultdict
 import random
 
 
-def load_shakespeare_clients(num_clients=3, min_samples=100):
-
-    ds = load_dataset("flwrlabs/shakespeare", split="train")
-
-    client_dict = defaultdict(list)
-
-    for example in ds:
-        client_dict[example["character_id"]].append(example["x"])
+def load_domain_clients():
 
     clients = {}
-    count = 0
 
-    for client_id, texts in client_dict.items():
+    # -------- Client 0 — Shakespeare --------
+    shakespeare = load_dataset("flwrlabs/shakespeare", split="train")
 
-        if len(texts) >= min_samples:
+    texts = [ex["x"] for ex in shakespeare if len(ex["x"]) > 20]
 
-            random.shuffle(texts)
+    random.shuffle(texts)
 
-            split_idx = int(0.8 * len(texts))
+    split = int(0.8 * len(texts))
 
-            train_texts = texts[:split_idx]
-            test_texts = texts[split_idx:]
+    clients["client_shakespeare"] = {
+        "train": texts[:split],
+        "test": texts[split:]
+    }
 
-            clients[client_id] = {
-                "train": train_texts,
-                "test": test_texts
-            }
 
-            count += 1
+    # -------- Client 1 — Reddit --------
+    reddit = load_dataset("reddit", "plain_text", split="train[:5000]")
 
-        if count >= num_clients:
-            break
+    texts = []
+
+    for ex in reddit:
+
+        body = ex["body"]
+
+        if body is None:
+            continue
+
+        if body in ["[removed]", "[deleted]"]:
+            continue
+
+        if len(body) < 20:
+            continue
+
+        texts.append(body)
+
+    random.shuffle(texts)
+
+    split = int(0.8 * len(texts))
+
+    clients["client_reddit"] = {
+        "train": texts[:split],
+        "test": texts[split:]
+    }
+
+
+    # -------- Client 2 — PubMed --------
+    pubmed = load_dataset("pubmed", split="train[:5000]")
+
+    texts = []
+
+    for ex in pubmed:
+
+        abstract = ex["abstract"]
+
+        if abstract is None:
+            continue
+
+        if len(abstract) < 40:
+            continue
+
+        texts.append(abstract)
+
+    random.shuffle(texts)
+
+    split = int(0.8 * len(texts))
+
+    clients["client_medical"] = {
+        "train": texts[:split],
+        "test": texts[split:]
+    }
 
     return clients

@@ -6,8 +6,9 @@ from clients.client_fedvoc import FedVocClient
 import copy
 import matplotlib.pyplot as plt
 
-clients_data = load_shakespeare_clients(num_clients=3)
+from utils.data_loader import load_domain_clients
 
+clients_data = load_domain_clients()
 clients = []
 
 for i, (cid, data) in enumerate(clients_data.items()):
@@ -27,7 +28,7 @@ round_losses = []
 
 print("Starting FedVoc v2 training (adapter + encoder shared)...")
 
-for round in range(8):
+for round in range(20):
     print(f"\n--- Round {round} ---")
 
     shared_updates = []

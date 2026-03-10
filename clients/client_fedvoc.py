@@ -16,8 +16,8 @@ class FedVocClient:
         self.model = FedVocModel(self.vocab_size).to(device)
 
         # 🔥 Freeze encoder for stability
-        # for param in self.model.encoder.parameters():
-        #     param.requires_grad = False
+        for param in self.model.encoder.parameters():
+            param.requires_grad = False
 
     def initialize_local_adapter(self, global_adapter_state):
         self.model.adapter.load_state_dict(global_adapter_state)
@@ -60,7 +60,7 @@ class FedVocClient:
         total_loss = 0
         steps = 0
 
-        for i in range(0, min(len(self.texts), 800), batch_size):
+        for i in range(0, min(len(self.texts), 4000), batch_size):
 
             batch_texts = self.texts[i:i + batch_size]
 

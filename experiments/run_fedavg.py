@@ -5,8 +5,9 @@ from clients.client_fedavg import FedAvgClient
 from server.server_base import Server
 import matplotlib.pyplot as plt
 
-clients_data = load_shakespeare_clients(num_clients=3)
+from utils.data_loader import load_domain_clients
 
+clients_data = load_domain_clients()
 tokenizer = Tokenizer.from_file(
     "fed_tokenizers/global_tokenizer.json"
 )
@@ -26,7 +27,7 @@ round_losses = []
 
 print("Starting TRUE FedAvg baseline with DistilBERT...")
 
-for round in range(8):
+for round in range(20):
     print(f"\n--- Round {round} ---")
 
     client_weights = []
