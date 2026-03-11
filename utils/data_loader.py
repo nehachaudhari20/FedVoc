@@ -1,80 +1,91 @@
 from datasets import load_dataset
 import random
+import re
+
+random.seed(42)
+
+
+def clean_text(text):
+
+    if text is None:
+        return None
+
+    text = text.strip().lower()
+
+    text = re.sub(r"http\S+", "", text)
+    text = re.sub(r"\[.*?\]\(.*?\)", "", text)
+    text = re.sub(r"\d+", "", text)
+    text = re.sub(r"[^\w\s.,!?;:']", " ", text)
+    text = re.sub(r"\s+", " ", text)
+
+    if len(text) < 20:
+        return None
+
+    return text
+
+
+def process_dataset(dataset, field):
+
+    texts = []
+
+    for ex in dataset:
+
+        t = clean_text(ex[field])
+
+        if t:
+
+            words = t.split()
+
+            if len(words) > 120:
+                t = " ".join(words[:120])
+
+            texts.append(t)
+
+    random.shuffle(texts)
+
+    split = int(0.8 * len(texts))
+
+    return {
+        "train": texts[:split],
+        "test": texts[split:]
+    }
 
 
 def load_domain_clients():
 
     clients = {}
 
-    # -------- Client 0 — Shakespeare --------
-    shakespeare = load_dataset("flwrlabs/shakespeare", split="train")
+    # Shakespeare
+    shakespeare = load_dataset(
+        "flwrlabs/shakespeare",
+        split="train[:15000]"
+    )
 
-    texts = [ex["x"] for ex in shakespeare if len(ex["x"]) > 20]
+    clients["client_shakespeare"] = process_dataset(
+        shakespeare,
+        "x"
+    )
 
-    random.shuffle(texts)
+    # News
+    news = load_dataset(
+        "ag_news",
+        split="train[:15000]"
+    )
 
-    split = int(0.8 * len(texts))
+    clients["client_news"] = process_dataset(
+        news,
+        "text"
+    )
 
-    clients["client_shakespeare"] = {
-        "train": texts[:split],
-        "test": texts[split:]
-    }
+    # Medical
+    pubmed = load_dataset(
+        "ccdv/pubmed-summarization",
+        split="train[:15000]"
+    )
 
-
-    # -------- Client 1 — Reddit --------
-    reddit = load_dataset("reddit", "plain_text", split="train[:5000]")
-
-    texts = []
-
-    for ex in reddit:
-
-        body = ex["body"]
-
-        if body is None:
-            continue
-
-        if body in ["[removed]", "[deleted]"]:
-            continue
-
-        if len(body) < 20:
-            continue
-
-        texts.append(body)
-
-    random.shuffle(texts)
-
-    split = int(0.8 * len(texts))
-
-    clients["client_reddit"] = {
-        "train": texts[:split],
-        "test": texts[split:]
-    }
-
-
-    # -------- Client 2 — PubMed --------
-    pubmed = load_dataset("pubmed", split="train[:5000]")
-
-    texts = []
-
-    for ex in pubmed:
-
-        abstract = ex["abstract"]
-
-        if abstract is None:
-            continue
-
-        if len(abstract) < 40:
-            continue
-
-        texts.append(abstract)
-
-    random.shuffle(texts)
-
-    split = int(0.8 * len(texts))
-
-    clients["client_medical"] = {
-        "train": texts[:split],
-        "test": texts[split:]
-    }
+    clients["client_medical"] = process_dataset(
+        pubmed,
+        "article"
+    )
 
     return clients
