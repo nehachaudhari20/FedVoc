@@ -1,4 +1,3 @@
-from utils.data_loader import load_shakespeare_clients
 from utils.communication import count_parameters
 from tokenizers import Tokenizer
 from clients.client_fedavg import FedAvgClient
@@ -27,7 +26,7 @@ round_losses = []
 
 print("Starting TRUE FedAvg baseline with DistilBERT...")
 
-for round in range(20):
+for round in range(5):
     print(f"\n--- Round {round} ---")
 
     client_weights = []

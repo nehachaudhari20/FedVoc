@@ -1,4 +1,3 @@
-from utils.data_loader import load_shakespeare_clients
 from utils.oov_eval import compute_oov_tokens
 from utils.communication import count_parameters
 from tokenizers import Tokenizer
@@ -28,7 +27,7 @@ round_losses = []
 
 print("Starting FedVoc v2 training (adapter + encoder shared)...")
 
-for round in range(20):
+for round in range(5):
     print(f"\n--- Round {round} ---")
 
     shared_updates = []
