@@ -17,7 +17,7 @@ class FedAvgClient:
     def initialize_local_model(self, global_model):
         self.model.load_state_dict(global_model.state_dict())
 
-    def _prepare_batch(self, texts, max_len=32):
+    def _prepare_batch(self, texts, max_len=64):
         input_ids_list = []
 
         for text in texts:
@@ -45,13 +45,13 @@ class FedAvgClient:
     def train_one_epoch(self, batch_size=16):
         self.model.train()
 
-        optimizer = optim.Adam(self.model.parameters(), lr=2e-4)
+        optimizer = optim.Adam(self.model.parameters(), lr=1e-3)
         criterion = nn.CrossEntropyLoss(ignore_index=0)
 
         total_loss = 0
         steps = 0
 
-        for i in range(0, min(len(self.texts), 4000), batch_size):
+        for i in range(0, min(len(self.texts), 800), batch_size):
             batch_texts = self.texts[i:i + batch_size]
 
             inputs, targets, mask = self._prepare_batch(batch_texts)

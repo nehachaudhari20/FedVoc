@@ -22,7 +22,7 @@ class FedVocClient:
     def initialize_local_adapter(self, global_adapter_state):
         self.model.adapter.load_state_dict(global_adapter_state)
 
-    def _prepare_batch(self, texts, max_len=32):
+    def _prepare_batch(self, texts, max_len=64):
         input_ids_list = []
 
         for text in texts:
@@ -52,7 +52,7 @@ class FedVocClient:
 
         optimizer = optim.Adam(
             filter(lambda p: p.requires_grad, self.model.parameters()),
-            lr=2e-4
+            lr=1e-3
         )
 
         criterion = nn.CrossEntropyLoss(ignore_index=0)
@@ -60,7 +60,7 @@ class FedVocClient:
         total_loss = 0
         steps = 0
 
-        for i in range(0, min(len(self.texts), 4000), batch_size):
+        for i in range(0, min(len(self.texts), 800), batch_size):
 
             batch_texts = self.texts[i:i + batch_size]
 
