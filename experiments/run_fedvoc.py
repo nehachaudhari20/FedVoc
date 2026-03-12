@@ -27,7 +27,7 @@ round_losses = []
 
 print("Starting FedVoc v2 training (adapter + encoder shared)...")
 
-for round in range(5):
+for round in range(8):
     print(f"\n--- Round {round} ---")
 
     shared_updates = []
