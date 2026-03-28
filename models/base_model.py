@@ -5,7 +5,8 @@ from models.adapter import LowRankAdapter
 
 
 class FedVocModel(nn.Module):
-    def __init__(self, vocab_size, d_model=768, rank=32):
+    def __init__(self, vocab_size, d_model=768, rank=64):
+        
         super().__init__()
 
         # LOCAL embedding
@@ -27,13 +28,15 @@ class FedVocModel(nn.Module):
 
         # LOCAL lm head
         self.lm_head = nn.Linear(d_model, vocab_size)
+        self.dropout = nn.Dropout(0.1)
 
     def forward(self, input_ids, attention_mask=None):
 
         x = self.embedding(input_ids)
 
         # ALIGNMENT STEP
-        x = self.adapter(x)
+        x = x + self.adapter(x)
+        x = self.dropout(x)
 
         outputs = self.encoder(
             inputs_embeds=x,

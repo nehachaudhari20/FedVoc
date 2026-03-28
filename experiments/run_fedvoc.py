@@ -27,13 +27,19 @@ round_losses = []
 
 print("Starting FedVoc v2 training (adapter + encoder shared)...")
 
-for round in range(8):
+for round in range(12):
     print(f"\n--- Round {round} ---")
 
     shared_updates = []
     total_round_loss = 0
 
     for client in clients:
+        if round < 2:
+            for param in client.model.encoder.parameters():
+                param.requires_grad = False
+        else:
+            for param in client.model.encoder.parameters():
+                param.requires_grad = True
         client.initialize_shared_weights(global_shared)
 
         loss = client.train_one_epoch()

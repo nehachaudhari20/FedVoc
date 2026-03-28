@@ -45,13 +45,13 @@ class FedAvgClient:
     def train_one_epoch(self, batch_size=16):
         self.model.train()
 
-        optimizer = optim.Adam(self.model.parameters(), lr=1e-3)
+        optimizer = optim.Adam(self.model.parameters(), lr=3e-4)
         criterion = nn.CrossEntropyLoss(ignore_index=0)
 
         total_loss = 0
         steps = 0
 
-        for i in range(0, min(len(self.texts), 800), batch_size):
+        for i in range(0, min(len(self.texts), 1200), batch_size):
             batch_texts = self.texts[i:i + batch_size]
 
             inputs, targets, mask = self._prepare_batch(batch_texts)

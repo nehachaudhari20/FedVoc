@@ -1,7 +1,9 @@
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
-from tokenizers.pre_tokenizers import Whitespace
+# from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.pre_tokenizers import ByteLevel
+
 import os
 
 from utils.data_loader import load_domain_clients
@@ -11,7 +13,7 @@ def build_tokenizer(texts, save_path, vocab_size=3000):
 
     tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
 
-    tokenizer.pre_tokenizer = Whitespace()
+    tokenizer.pre_tokenizer = ByteLevel()
 
     trainer = BpeTrainer(
         vocab_size=vocab_size,

@@ -26,7 +26,7 @@ round_losses = []
 
 print("Starting TRUE FedAvg baseline with DistilBERT...")
 
-for round in range(8):
+for round in range(12):
     print(f"\n--- Round {round} ---")
 
     client_weights = []

@@ -50,17 +50,14 @@ class FedVocClient:
     def train_one_epoch(self, batch_size=16):
         self.model.train()
 
-        optimizer = optim.Adam(
-            filter(lambda p: p.requires_grad, self.model.parameters()),
-            lr=1e-3
-        )
+        optimizer = self.optimizer
 
         criterion = nn.CrossEntropyLoss(ignore_index=0)
 
         total_loss = 0
         steps = 0
 
-        for i in range(0, min(len(self.texts), 800), batch_size):
+        for i in range(0, min(len(self.texts), 1200), batch_size):
 
             batch_texts = self.texts[i:i + batch_size]
 
@@ -120,6 +117,10 @@ class FedVocClient:
 
         self.model.adapter.load_state_dict(adapter_state)
         self.model.encoder.load_state_dict(encoder_state)
+        self.optimizer = optim.Adam(
+            filter(lambda p: p.requires_grad, self.model.parameters()),
+            lr=3e-4   # slightly lower than before
+        )
 
     def evaluate(self, test_texts, batch_size=16):
 

@@ -10,6 +10,8 @@ class Server:
         new_state = copy.deepcopy(self.global_model.state_dict())
 
         for key in new_state.keys():
+            if "embedding" in key or "lm_head" in key:
+                continue
             new_state[key] = sum(
                 weights[key] for weights in client_weights
             ) / len(client_weights)
