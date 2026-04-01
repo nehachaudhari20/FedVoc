@@ -6,16 +6,19 @@ from torch.nn.utils.rnn import pad_sequence
 
 
 class FedVocClient:
-    def __init__(self, tokenizer, texts, device="cpu"):
+    def __init__(self, tokenizer, texts, device=None):
         self.tokenizer = tokenizer
         self.texts = texts
-        self.device = device
+
+        # ✅ AUTO DEVICE SELECTION
+        self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.vocab_size = tokenizer.get_vocab_size()
+        self.model = FedVocModel(self.vocab_size).to(self.device)
 
-        self.model = FedVocModel(self.vocab_size).to(device)
         self.pad_id = tokenizer.token_to_id("[PAD]")
-        # 🔥 Freeze encoder for stability
+
+        # 🔥 Freeze encoder initially
         for param in self.model.encoder.parameters():
             param.requires_grad = False
 

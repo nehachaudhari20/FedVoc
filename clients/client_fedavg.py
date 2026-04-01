@@ -6,16 +6,19 @@ from models.base_model import FedVocModel
 
 
 class FedAvgClient:
-    def __init__(self, tokenizer, texts, device="cpu"):
+    def __init__(self, tokenizer, texts, device=None):
         self.tokenizer = tokenizer
         self.texts = texts
-        self.device = device
+
+        # ✅ AUTO DEVICE SELECTION
+        self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.vocab_size = tokenizer.get_vocab_size()
-        self.model = FedVocModel(self.vocab_size).to(device)
+        self.model = FedVocModel(self.vocab_size).to(self.device)
+
         self.pad_id = tokenizer.token_to_id("[PAD]")
 
-        # ✅ FIX: move optimizer here
+        # optimizer
         self.optimizer = optim.Adam(self.model.parameters(), lr=3e-4)
 
     def initialize_local_model(self, global_model):

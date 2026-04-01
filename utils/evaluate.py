@@ -1,11 +1,14 @@
 import torch
 import torch.nn as nn
-from torch.nn.utils.rnn import pad_sequence
 import math
 
 
-def evaluate_model(model, tokenizer, texts, device="cpu", max_len=80):
+def evaluate_model(model, tokenizer, texts, device=None, max_len=80):
 
+    # ✅ AUTO DEVICE
+    device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.to(device)
     model.eval()
 
     pad_id = tokenizer.token_to_id("[PAD]")
