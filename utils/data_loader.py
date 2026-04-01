@@ -12,10 +12,12 @@ def clean_text(text):
 
     text = text.strip().lower()
 
+    # remove links only
     text = re.sub(r"http\S+", "", text)
-    text = re.sub(r"\[.*?\]\(.*?\)", "", text)
-    text = re.sub(r"\d+", "", text)
-    text = re.sub(r"[^\w\s.,!?;:']", " ", text)
+
+    # KEEP numbers + hyphen words
+    text = re.sub(r"[^a-zA-Z0-9\s.,!?;:\-']", " ", text)
+
     text = re.sub(r"\s+", " ", text)
 
     if len(text) < 20:
@@ -35,7 +37,8 @@ def process_dataset(dataset, field):
         if t:
 
             words = t.split()
-
+            if len(words) < 5:
+                continue
             if len(words) > 120:
                 t = " ".join(words[:120])
 
@@ -58,7 +61,7 @@ def load_domain_clients():
     # Shakespeare
     shakespeare = load_dataset(
         "flwrlabs/shakespeare",
-        split="train[:15000]"
+        split="train[:12000]"
     )
 
     clients["client_shakespeare"] = process_dataset(

@@ -13,11 +13,15 @@ class FedAvgClient:
 
         self.vocab_size = tokenizer.get_vocab_size()
         self.model = FedVocModel(self.vocab_size).to(device)
+        self.pad_id = tokenizer.token_to_id("[PAD]")
+
+        # ✅ FIX: move optimizer here
+        self.optimizer = optim.Adam(self.model.parameters(), lr=3e-4)
 
     def initialize_local_model(self, global_model):
         self.model.load_state_dict(global_model.state_dict())
 
-    def _prepare_batch(self, texts, max_len=64):
+    def _prepare_batch(self, texts, max_len=80):
         input_ids_list = []
 
         for text in texts:
@@ -27,15 +31,15 @@ class FedAvgClient:
             input_ids_list.append(torch.tensor(ids))
 
         if len(input_ids_list) == 0:
-            return None, None
+            return None, None, None
 
         padded = pad_sequence(
             input_ids_list,
             batch_first=True,
-            padding_value=0
+            padding_value=self.pad_id
         )
 
-        attention_mask = (padded != 0).long()
+        attention_mask = (padded != self.pad_id).long()
 
         inputs = padded[:, :-1]
         targets = padded[:, 1:]
@@ -45,13 +49,17 @@ class FedAvgClient:
     def train_one_epoch(self, batch_size=16):
         self.model.train()
 
-        optimizer = optim.Adam(self.model.parameters(), lr=3e-4)
-        criterion = nn.CrossEntropyLoss(ignore_index=0)
+        optimizer = self.optimizer  # ✅ reuse
+
+        criterion = nn.CrossEntropyLoss(
+            ignore_index=self.pad_id,
+            label_smoothing=0.1
+        )
 
         total_loss = 0
         steps = 0
 
-        for i in range(0, min(len(self.texts), 1200), batch_size):
+        for i in range(0, min(len(self.texts), 3000), batch_size):
             batch_texts = self.texts[i:i + batch_size]
 
             inputs, targets, mask = self._prepare_batch(batch_texts)
@@ -87,7 +95,10 @@ class FedAvgClient:
     def evaluate(self, test_texts, batch_size=16):
         self.model.eval()
 
-        criterion = nn.CrossEntropyLoss(ignore_index=0)
+        criterion = nn.CrossEntropyLoss(
+            ignore_index=self.pad_id,
+            label_smoothing=0.1
+        )
 
         total_loss = 0
         steps = 0

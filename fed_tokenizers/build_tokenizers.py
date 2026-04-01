@@ -9,15 +9,15 @@ import os
 from utils.data_loader import load_domain_clients
 
 
-def build_tokenizer(texts, save_path, vocab_size=3000):
+def build_tokenizer(texts, save_path, vocab_size=5000):
 
     tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
 
     tokenizer.pre_tokenizer = ByteLevel()
 
     trainer = BpeTrainer(
-        vocab_size=vocab_size,
-        special_tokens=["[UNK]"]
+        vocab_size=5000,
+        special_tokens=["[UNK]", "[PAD]", "[CLS]", "[SEP]"]
     )
 
     tokenizer.train_from_iterator(texts, trainer)

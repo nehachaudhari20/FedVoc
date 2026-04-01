@@ -4,10 +4,16 @@ from torch.nn.utils.rnn import pad_sequence
 import math
 
 
-def evaluate_model(model, tokenizer, texts, device="cpu", max_len=32):
+def evaluate_model(model, tokenizer, texts, device="cpu", max_len=80):
 
     model.eval()
-    criterion = nn.CrossEntropyLoss(ignore_index=0)
+
+    pad_id = tokenizer.token_to_id("[PAD]")
+
+    criterion = nn.CrossEntropyLoss(
+        ignore_index=pad_id,
+        label_smoothing=0.1
+    )
 
     total_loss = 0
     steps = 0
@@ -26,7 +32,7 @@ def evaluate_model(model, tokenizer, texts, device="cpu", max_len=32):
             inputs = input_tensor[:, :-1]
             targets = input_tensor[:, 1:]
 
-            attention_mask = (inputs != 0).long()
+            attention_mask = (inputs != pad_id).long()
 
             logits = model(inputs, attention_mask)
 
