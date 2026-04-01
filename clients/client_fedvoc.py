@@ -10,7 +10,7 @@ class FedVocClient:
         self.tokenizer = tokenizer
         self.texts = texts
 
-        # ✅ AUTO DEVICE SELECTION
+        # Device
         self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.vocab_size = tokenizer.get_vocab_size()
@@ -22,8 +22,11 @@ class FedVocClient:
         for param in self.model.encoder.parameters():
             param.requires_grad = False
 
-    def initialize_local_adapter(self, global_adapter_state):
-        self.model.adapter.load_state_dict(global_adapter_state)
+        # ✅ CRITICAL FIX: define optimizer here
+        self.optimizer = optim.Adam(
+            filter(lambda p: p.requires_grad, self.model.parameters()),
+            lr=3e-4
+        )
 
     def _prepare_batch(self, texts, max_len=80):
         input_ids_list = []
@@ -53,8 +56,6 @@ class FedVocClient:
     def train_one_epoch(self, batch_size=16):
         self.model.train()
 
-        optimizer = self.optimizer
-
         criterion = nn.CrossEntropyLoss(
             ignore_index=self.pad_id,
             label_smoothing=0.1
@@ -66,7 +67,6 @@ class FedVocClient:
         for i in range(0, min(len(self.texts), 3000), batch_size):
 
             batch_texts = self.texts[i:i + batch_size]
-
             inputs, targets, mask = self._prepare_batch(batch_texts)
 
             if inputs is None:
@@ -76,7 +76,7 @@ class FedVocClient:
             targets = targets.to(self.device)
             mask = mask.to(self.device)
 
-            optimizer.zero_grad()
+            self.optimizer.zero_grad()
 
             logits = self.model(inputs, mask)
 
@@ -87,24 +87,19 @@ class FedVocClient:
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            optimizer.step()
+            self.optimizer.step()
 
             total_loss += loss.item()
             steps += 1
 
         return total_loss / max(steps, 1)
 
-    def get_adapter_weights(self):
-        return self.model.adapter.state_dict()
-
     def get_shared_weights(self):
         shared_state = {}
 
-        # Adapter weights
         for key, value in self.model.adapter.state_dict().items():
             shared_state["adapter." + key] = value
 
-        # Encoder weights
         for key, value in self.model.encoder.state_dict().items():
             shared_state["encoder." + key] = value
 
@@ -124,7 +119,7 @@ class FedVocClient:
         self.model.adapter.load_state_dict(adapter_state)
         self.model.encoder.load_state_dict(encoder_state)
 
-        # ✅ FIX: recreate optimizer AFTER freeze/unfreeze
+        # ✅ CRITICAL: recreate optimizer AFTER freeze/unfreeze
         self.optimizer = optim.Adam(
             filter(lambda p: p.requires_grad, self.model.parameters()),
             lr=3e-4
@@ -143,11 +138,9 @@ class FedVocClient:
         steps = 0
 
         with torch.no_grad():
-
             for i in range(0, len(test_texts), batch_size):
 
                 batch_texts = test_texts[i:i + batch_size]
-
                 inputs, targets, mask = self._prepare_batch(batch_texts)
 
                 if inputs is None:
@@ -168,7 +161,6 @@ class FedVocClient:
                 steps += 1
 
         avg_loss = total_loss / max(steps, 1)
-
         perplexity = torch.exp(torch.tensor(avg_loss)).item()
 
         return avg_loss, perplexity

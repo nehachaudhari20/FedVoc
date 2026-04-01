@@ -1,10 +1,12 @@
-from utils.communication import count_parameters
+import os
+import torch
+import matplotlib.pyplot as plt
 from tokenizers import Tokenizer
+
+from utils.communication import count_parameters
+from utils.data_loader import load_domain_clients
 from clients.client_fedavg import FedAvgClient
 from server.server_base import Server
-import matplotlib.pyplot as plt
-
-from utils.data_loader import load_domain_clients
 
 clients_data = load_domain_clients()
 tokenizer = Tokenizer.from_file(
@@ -26,7 +28,7 @@ round_losses = []
 
 print("Starting TRUE FedAvg baseline with DistilBERT...")
 
-for round in range(20):
+for round in range(8):
     print(f"\n--- Round {round} ---")
 
     client_weights = []
@@ -63,3 +65,13 @@ plt.savefig("results/fedavg_convergence.png")
 plt.close()
 
 print("\nConvergence plot saved to results/fedavg_convergence.png")
+
+
+os.makedirs("saved_models", exist_ok=True)
+
+torch.save(
+    server.global_model.state_dict(),
+    "saved_models/fedavg_model.pt"
+)
+
+print("✅ FedAvg model saved.")

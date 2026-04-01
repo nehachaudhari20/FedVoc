@@ -3,6 +3,8 @@ from utils.communication import count_parameters
 from tokenizers import Tokenizer
 from clients.client_fedvoc import FedVocClient
 import copy
+import torch
+import os
 import matplotlib.pyplot as plt
 
 from utils.data_loader import load_domain_clients
@@ -27,7 +29,7 @@ round_losses = []
 
 print("Starting FedVoc v2 training (adapter + encoder shared)...")
 
-for round in range(20):
+for round in range(8):
     print(f"\n--- Round {round} ---")
 
     shared_updates = []
@@ -102,3 +104,13 @@ plt.savefig("results/fedvoc_convergence.png")
 plt.close()
 
 print("\nConvergence plot saved to results/fedvoc_convergence.png")
+
+os.makedirs("saved_models", exist_ok=True)
+
+for i, client in enumerate(clients):
+    torch.save(
+        client.model.state_dict(),
+        f"saved_models/fedvoc_client_{i}.pt"
+    )
+
+print("✅ FedVoc client models saved.")

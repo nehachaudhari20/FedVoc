@@ -10,7 +10,7 @@ class FedAvgClient:
         self.tokenizer = tokenizer
         self.texts = texts
 
-        # ✅ AUTO DEVICE SELECTION
+        # Device
         self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.vocab_size = tokenizer.get_vocab_size()
@@ -18,7 +18,7 @@ class FedAvgClient:
 
         self.pad_id = tokenizer.token_to_id("[PAD]")
 
-        # optimizer
+        # ✅ optimizer defined once
         self.optimizer = optim.Adam(self.model.parameters(), lr=3e-4)
 
     def initialize_local_model(self, global_model):
@@ -52,8 +52,6 @@ class FedAvgClient:
     def train_one_epoch(self, batch_size=16):
         self.model.train()
 
-        optimizer = self.optimizer  # ✅ reuse
-
         criterion = nn.CrossEntropyLoss(
             ignore_index=self.pad_id,
             label_smoothing=0.1
@@ -63,8 +61,8 @@ class FedAvgClient:
         steps = 0
 
         for i in range(0, min(len(self.texts), 3000), batch_size):
-            batch_texts = self.texts[i:i + batch_size]
 
+            batch_texts = self.texts[i:i + batch_size]
             inputs, targets, mask = self._prepare_batch(batch_texts)
 
             if inputs is None:
@@ -74,7 +72,7 @@ class FedAvgClient:
             targets = targets.to(self.device)
             mask = mask.to(self.device)
 
-            optimizer.zero_grad()
+            self.optimizer.zero_grad()
 
             logits = self.model(inputs, mask)
 
@@ -85,7 +83,7 @@ class FedAvgClient:
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            optimizer.step()
+            self.optimizer.step()
 
             total_loss += loss.item()
             steps += 1
@@ -107,11 +105,9 @@ class FedAvgClient:
         steps = 0
 
         with torch.no_grad():
-
             for i in range(0, len(test_texts), batch_size):
 
                 batch_texts = test_texts[i:i + batch_size]
-
                 inputs, targets, mask = self._prepare_batch(batch_texts)
 
                 if inputs is None:
