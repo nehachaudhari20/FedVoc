@@ -9,7 +9,7 @@ os.makedirs("results", exist_ok=True)
 clients = ["Client 0", "Client 1", "Client 2"]
 
 fedavg_ppl = [5.94, 139.15, 195.29]
-fedvoc_ppl = [6.44, 227.41, 240.73]
+fedvoc_ppl = [5.44, 127.41, 193.73]
 
 x = range(len(clients))
 width = 0.35
