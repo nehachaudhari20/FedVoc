@@ -15,7 +15,17 @@ print(f"Using device: {device}")
 # CLEAN TOKEN
 # -----------------------------
 def clean_token(token):
-    return token.replace("Ġ", "").strip()
+    token = token.replace("Ġ", "").strip()
+
+    # remove special junk
+    if not token.isalpha():
+        return None
+
+    # remove extreme junk (single chars only)
+    if len(token) == 1:
+        return None
+
+    return token.lower()
 
 
 # -----------------------------
@@ -58,7 +68,7 @@ fedvoc_models = [
 # -----------------------------
 # PREDICTION FUNCTION
 # -----------------------------
-def predict_next_words(model, tokenizer, text, top_k=5, max_len=80):
+def predict_next_words(model, tokenizer, text, top_k=10, max_len=80):
 
     ids = tokenizer.encode(text).ids[-max_len:]
 
@@ -80,12 +90,22 @@ def predict_next_words(model, tokenizer, text, top_k=5, max_len=80):
 
     id_to_token = {v: k for k, v in tokenizer.get_vocab().items()}
 
-    results = []
+    cleaned = []
     for idx, prob in zip(topk.indices, topk.values):
-        token = clean_token(id_to_token.get(idx.item(), "[UNK]"))
-        results.append((token, prob.item()))
+        token = id_to_token.get(idx.item(), "[UNK]")
+        token = clean_token(token)
 
-    return results
+        if token:
+            cleaned.append((token, prob.item()))
+
+    if len(cleaned) == 0:
+        fallback = []
+        for idx, prob in zip(topk.indices, topk.values):
+            token = id_to_token.get(idx.item(), "[UNK]")
+            fallback.append((token, prob.item()))
+        return fallback[:3]
+
+    return cleaned[:3]
 
 
 # -----------------------------
@@ -110,7 +130,7 @@ def run():
         )
 
         for word, prob in preds:
-            print(f"{word} ({prob:.3f})")
+            print(f"{word:<12} → {prob:.2f}")
 
         # -------- FedVoc --------
         print("\n🔹 FedVoc (Domain-specific):")
