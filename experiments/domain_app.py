@@ -1,7 +1,17 @@
 """
 domain_app.py — interactive domain-aware next word prediction demo.
 
+Shows predictions from three model families side by side:
+    1. FedAvg Transformer  — global model, shared vocab
+    2. FedVoc Transformer  — domain-specific, adapter + DistilBERT encoder
+    3. FedAvg LSTM         — global model, shared vocab, LSTM backbone
+    4. FedVoc LSTM         — domain-specific, adapter + LSTM backbone
+
 Changes from original:
+    - LSTM models (FedAvgLSTMModel + FedVocLSTMModel) loaded alongside transformers
+    - predict_next_words() works for both model types — no changes needed
+      (both take input_ids + attention_mask and return logits)
+    - Output section reorganised: transformer block then LSTM block per input
     - Improved clean_token(): filters subword fragments (min length 3,
       strips ## and Ġ prefixes properly)
     - Shows domain accuracy score alongside predictions
@@ -12,6 +22,7 @@ import torch
 import torch.nn.functional as F
 from tokenizers import Tokenizer
 from models.base_model import FedVocModel
+from models.lstm_model import FedVocLSTMModel
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -23,20 +34,12 @@ print(f"Using device: {device}")
 def clean_token(token):
     """
     Filter out subword fragments and noise from BPE predictions.
-
-    Original filtered: non-alpha, length <= 1
-    Now also filters: length < 3 (catches "id", "om", "at" etc.)
     """
-    # Strip BPE continuation prefixes
     token = token.replace("Ġ", "").replace("##", "").strip()
-
     if not token.isalpha():
         return None
-
-    # FIX: minimum length 3 to catch subword fragments like "id", "om", "at"
     if len(token) < 3:
         return None
-
     return token.lower()
 
 
@@ -54,30 +57,56 @@ domains = ["Shakespeare", "News", "Medical"]
 
 # ── Load models ────────────────────────────────────────────────────────────────
 
-def load_model(path, vocab_size):
+def load_transformer(path, vocab_size):
     model = FedVocModel(vocab_size).to(device)
     model.load_state_dict(torch.load(path, map_location=device))
     model.eval()
     return model
 
 
-fedavg_model = load_model(
+def load_lstm(path, vocab_size):
+    model = FedVocLSTMModel(vocab_size).to(device)
+    model.load_state_dict(torch.load(path, map_location=device))
+    model.eval()
+    return model
+
+
+print("Loading transformer models...")
+fedavg_transformer = load_transformer(
     "saved_models/fedavg_model.pt",
     global_tokenizer.get_vocab_size()
 )
-
-fedvoc_models = [
-    load_model(
+fedvoc_transformers = [
+    load_transformer(
         f"saved_models/fedvoc_client_{i}.pt",
         client_tokenizers[i].get_vocab_size()
     )
     for i in range(3)
 ]
 
+print("Loading LSTM models...")
+fedavg_lstm = load_lstm(
+    "saved_models/fedavg_lstm_model.pt",
+    global_tokenizer.get_vocab_size()
+)
+fedvoc_lstms = [
+    load_lstm(
+        f"saved_models/fedvoc_lstm_client_{i}.pt",
+        client_tokenizers[i].get_vocab_size()
+    )
+    for i in range(3)
+]
+
+print("All models loaded.\n")
+
 
 # ── Prediction ─────────────────────────────────────────────────────────────────
 
 def predict_next_words(model, tokenizer, text, top_k=10, max_len=80):
+    """
+    Works for both transformer and LSTM models — both accept
+    (input_ids, attention_mask) and return (B, T, vocab_size) logits.
+    """
     ids = tokenizer.encode(text).ids[-max_len:]
     if not ids:
         return []
@@ -102,7 +131,7 @@ def predict_next_words(model, tokenizer, text, top_k=10, max_len=80):
         if token:
             cleaned.append((token, prob.item()))
 
-    # Fallback: return raw tokens if all cleaned
+    # Fallback: return raw tokens if all were filtered
     if not cleaned:
         for idx, prob in zip(topk.indices[:3], topk.values[:3]):
             token = id_to_token.get(idx.item(), "[UNK]")
@@ -114,9 +143,12 @@ def predict_next_words(model, tokenizer, text, top_k=10, max_len=80):
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def run():
-    print("\n=== Domain-Aware Next Word Prediction ===")
-    print("Note: FedVoc perplexity vs FedAvg is not directly comparable")
-    print("(different vocabularies). Domain accuracy is the meaningful metric.\n")
+    print("=" * 55)
+    print("   Domain-Aware Next Word Prediction Demo")
+    print("   Transformer vs LSTM | FedAvg vs FedVoc")
+    print("=" * 55)
+    print("Note: Perplexity across tokenizers is not directly")
+    print("comparable. Domain accuracy is the meaningful metric.\n")
 
     while True:
         text = input("\nEnter text (or 'exit'): ").strip()
@@ -125,19 +157,37 @@ def run():
         if not text:
             continue
 
-        # FedAvg global predictions
-        print("\nFedAvg (global):")
-        preds = predict_next_words(fedavg_model, global_tokenizer, text)
-        for word, prob in preds:
-            print(f"  {word:<14} {prob:.3f}")
+        # ── Transformer ───────────────────────────────────────────────────────
+        print("\n── TRANSFORMER ──────────────────────────────────────")
 
-        # FedVoc domain-specific predictions
-        print("\nFedVoc (domain-specific):")
+        print("\n  FedAvg (global, transformer):")
+        preds = predict_next_words(fedavg_transformer, global_tokenizer, text)
+        for word, prob in preds:
+            print(f"    {word:<14} {prob:.3f}")
+
+        print("\n  FedVoc (domain-specific, transformer):")
         for i, domain in enumerate(domains):
-            preds = predict_next_words(fedvoc_models[i], client_tokenizers[i], text)
-            print(f"\n  {domain}:")
+            preds = predict_next_words(fedvoc_transformers[i], client_tokenizers[i], text)
+            print(f"\n    {domain}:")
             for word, prob in preds:
-                print(f"    {word:<12} {prob:.3f}")
+                print(f"      {word:<12} {prob:.3f}")
+
+        # ── LSTM ──────────────────────────────────────────────────────────────
+        print("\n── LSTM ─────────────────────────────────────────────")
+
+        print("\n  FedAvg (global, LSTM):")
+        preds = predict_next_words(fedavg_lstm, global_tokenizer, text)
+        for word, prob in preds:
+            print(f"    {word:<14} {prob:.3f}")
+
+        print("\n  FedVoc (domain-specific, LSTM):")
+        for i, domain in enumerate(domains):
+            preds = predict_next_words(fedvoc_lstms[i], client_tokenizers[i], text)
+            print(f"\n    {domain}:")
+            for word, prob in preds:
+                print(f"      {word:<12} {prob:.3f}")
+
+        print("\n" + "─" * 55)
 
 
 if __name__ == "__main__":
