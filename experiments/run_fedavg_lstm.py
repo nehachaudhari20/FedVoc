@@ -1,12 +1,17 @@
 """
-run_fedavg.py — improved FedAvg baseline
+run_fedavg_lstm.py — FedAvg baseline with LSTM language model.
 
-Changes vs original:
-    1. Pretrained DistilBERT encoder loaded for fair comparison with FedVoc
-    2. Full dataset used per epoch (removed 3000-sample cap)
-    3. Cosine LR scheduler stepped each round
-    4. Weighted aggregation by dataset size (same as FedVoc)
-    5. Saves results/fedavg_results.json for compare_results.py
+Mirrors run_fedavg.py exactly, with two differences:
+  1. Uses FedAvgLSTMClient instead of FedAvgClient
+  2. No pretrained encoder warm-start (LSTM trains from scratch)
+
+Run AFTER run_fedavg.py and run_fedvoc.py so compare_results.py
+can load all four result JSON files for a side-by-side comparison.
+
+Output:
+  results/fedavg_lstm_convergence.png
+  results/fedavg_lstm_results.json     ← consumed by compare_results.py
+  saved_models/fedavg_lstm_model.pt
 """
 
 import json
@@ -16,7 +21,7 @@ import matplotlib.pyplot as plt
 import torch
 from tokenizers import Tokenizer
 
-from clients.client_fedavg import FedAvgClient
+from clients.client_fedavg_lstm import FedAvgLSTMClient
 from server.server_base import Server
 from utils.communication import count_parameters
 from utils.data_loader import load_domain_clients
@@ -25,40 +30,61 @@ from utils.data_loader import load_domain_clients
 # ── Data ──────────────────────────────────────────────────────────────────────
 
 clients_data = load_domain_clients()
-tokenizer = Tokenizer.from_file("fed_tokenizers/global_tokenizer.json")
-vocab_size = tokenizer.get_vocab_size()
+tokenizer    = Tokenizer.from_file("fed_tokenizers/global_tokenizer.json")
+vocab_size   = tokenizer.get_vocab_size()
 
-server = Server(vocab_size)
-clients = []
+server  = Server(vocab_size)          # Server still uses FedVocModel internally
+clients = []                          # but we only use it for aggregation shape
+
+# We need a lightweight LSTM server model for aggregation.
+# Reuse Server but override global_model with an LSTM instance.
+from models.lstm_model import FedVocLSTMModel
+
+class LSTMServer:
+    """Minimal server that holds an LSTM global model and does weighted FedAvg."""
+
+    def __init__(self, vocab_size):
+        import copy
+        self.global_model = FedVocLSTMModel(vocab_size)
+        self._vocab_size  = vocab_size
+
+    def aggregate(self, client_weights_list, dataset_weights=None):
+        import copy
+        n = len(client_weights_list)
+        if dataset_weights is None:
+            dataset_weights = [1.0 / n] * n
+
+        new_state = copy.deepcopy(self.global_model.state_dict())
+        for key in new_state.keys():
+            new_state[key] = sum(
+                w * weights[key]
+                for w, weights in zip(dataset_weights, client_weights_list)
+            )
+        self.global_model.load_state_dict(new_state)
+
+server = LSTMServer(vocab_size)
 
 for cid, data in clients_data.items():
-    client = FedAvgClient(tokenizer, data["train"])
+    client = FedAvgLSTMClient(tokenizer, data["train"])
     client.test_texts = data["test"]
     clients.append(client)
 
-# Dataset sizes for weighted aggregation
-dataset_sizes = [len(c.texts) for c in clients]
-total_samples = sum(dataset_sizes)
+dataset_sizes  = [len(c.texts) for c in clients]
+total_samples  = sum(dataset_sizes)
 client_weights = [s / total_samples for s in dataset_sizes]
-
-# ── Pretrained encoder warm-start ─────────────────────────────────────────────
-
-print("Loading pretrained DistilBERT into FedAvg server model...")
-server.global_model.load_pretrained_encoder()
-print("Pretrained encoder loaded.\n")
 
 # ── Training loop ─────────────────────────────────────────────────────────────
 
-ROUNDS = 20
+ROUNDS      = 20
 round_losses = []
 
-print("Starting FedAvg training...")
+print("Starting FedAvg LSTM training...")
 
 for round_idx in range(ROUNDS):
     print(f"\n--- Round {round_idx} ---")
 
     client_weight_list = []
-    total_round_loss = 0
+    total_round_loss   = 0
 
     for client in clients:
         client.initialize_local_model(server.global_model)
@@ -68,19 +94,17 @@ for round_idx in range(ROUNDS):
         total_round_loss += loss
         client_weight_list.append(client.get_model_weights())
 
-    # Weighted aggregation
     server.aggregate(client_weight_list, client_weights)
-
     round_losses.append(total_round_loss / len(clients))
 
     for client in clients:
         client.step_scheduler()
 
-print("\nFedAvg training complete.")
+print("\nFedAvg LSTM training complete.")
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
-print("\nEvaluating FedAvg...")
+print("\nEvaluating FedAvg LSTM...")
 eval_results = []
 
 for i, client in enumerate(clients):
@@ -90,31 +114,30 @@ for i, client in enumerate(clients):
     eval_results.append({"client": i, "loss": loss, "perplexity": ppl})
 
 comm_cost = count_parameters(server.global_model.state_dict())
-print(f"\nFedAvg communication cost per round: {comm_cost:,} params")
+print(f"\nFedAvg LSTM communication cost per round: {comm_cost:,} params")
 
 # ── Save results for compare_results.py ───────────────────────────────────────
 
 os.makedirs("results", exist_ok=True)
-with open("results/fedavg_results.json", "w") as f:
+with open("results/fedavg_lstm_results.json", "w") as f:
     json.dump({
         "round_losses": round_losses,
         "eval":         eval_results,
         "comm_cost":    comm_cost,
     }, f, indent=2)
-print("Results saved to results/fedavg_results.json")
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
 
 plt.plot(round_losses)
-plt.title("FedAvg convergence")
+plt.title("FedAvg LSTM convergence")
 plt.xlabel("Round")
 plt.ylabel("Avg loss")
-plt.savefig("results/fedavg_convergence.png")
+plt.savefig("results/fedavg_lstm_convergence.png")
 plt.close()
-print("Convergence plot saved to results/fedavg_convergence.png")
+print("Convergence plot saved to results/fedavg_lstm_convergence.png")
 
-# ── Save models ───────────────────────────────────────────────────────────────
+# ── Save model ────────────────────────────────────────────────────────────────
 
 os.makedirs("saved_models", exist_ok=True)
-torch.save(server.global_model.state_dict(), "saved_models/fedavg_model.pt")
-print("FedAvg model saved.")
+torch.save(server.global_model.state_dict(), "saved_models/fedavg_lstm_model.pt")
+print("FedAvg LSTM model saved.")

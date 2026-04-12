@@ -1,22 +1,25 @@
 """
-run_fedvoc.py — improved FedVoc training script
+run_fedvoc_lstm.py — FedVoc training with LSTM language model.
 
-Bug fixes vs original:
-    1. Global shared state initialised by averaging ALL clients, not just client 0
-    2. Weighted FedAvg aggregation by dataset size
-    3. Optimizer momentum preserved — only rebuilt when freeze state changes
-    4. Only adapter weights are shared (not full encoder)
+Mirrors run_fedvoc.py exactly, with two differences:
+  1. Uses FedVocLSTMClient instead of FedVocClient
+  2. No pretrained encoder — LSTM trains from scratch
 
-Training improvements:
-    5. Pretrained DistilBERT encoder warm-start
-    6. Cosine LR scheduler stepped each round
-    7. Full dataset used per epoch (removed 3000-sample cap)
-    8. FedProx proximal term (mu=0.01)
+Shared weights per round: lstm + adapter (~8.4M params)
+  Compare to transformer FedVoc: adapter only (~24K params)
+  Compare to transformer FedAvg: full model (~74M params)
 
-Evaluation improvements:
-    9. Domain accuracy metric alongside perplexity
-   10. Fixed OOV rate (rate on test sentences, not type count)
-   11. Saves results/fedvoc_results.json for compare_results.py
+Run order (suggested):
+  python run_fedavg.py
+  python run_fedvoc.py
+  python run_fedavg_lstm.py
+  python run_fedvoc_lstm.py
+  python utils/compare_results.py
+
+Output:
+  results/fedvoc_lstm_convergence.png
+  results/fedvoc_lstm_results.json     ← consumed by compare_results.py
+  saved_models/fedvoc_lstm_client_{i}.pt
 """
 
 import json
@@ -26,7 +29,7 @@ import matplotlib.pyplot as plt
 import torch
 from tokenizers import Tokenizer
 
-from clients.client_fedvoc import FedVocClient
+from clients.client_fedvoc_lstm import FedVocLSTMClient
 from utils.communication import count_parameters
 from utils.data_loader import load_domain_clients
 from utils.oov_eval import oov_rate
@@ -36,54 +39,46 @@ from utils.domain_eval import domain_accuracy
 # ── Data ──────────────────────────────────────────────────────────────────────
 
 clients_data = load_domain_clients()
-clients = []
+clients      = []
 
 for i, (cid, data) in enumerate(clients_data.items()):
     tokenizer = Tokenizer.from_file(f"fed_tokenizers/tokenizer_client_{i}.json")
-    client = FedVocClient(tokenizer, data["train"])
+    client    = FedVocLSTMClient(tokenizer, data["train"])
     client.test_texts = data["test"]
     clients.append(client)
 
-# ── Pretrained encoder warm-start ─────────────────────────────────────────────
-
-print("Loading pretrained DistilBERT encoder into all clients...")
-clients[0].model.load_pretrained_encoder()
-pretrained_encoder_state = clients[0].model.encoder.state_dict()
-for client in clients[1:]:
-    client.model.encoder.load_state_dict(pretrained_encoder_state)
-print("Pretrained encoder loaded.\n")
-
 # ── Global shared state initialisation ────────────────────────────────────────
+# Average ALL clients' initial lstm + adapter weights (same fix as run_fedvoc.py).
 
-all_init = [c.get_shared_weights() for c in clients]
+all_init     = [c.get_shared_weights() for c in clients]
 global_shared = {}
 for key in all_init[0]:
     global_shared[key] = sum(w[key] for w in all_init) / len(all_init)
 
 # ── Training loop ─────────────────────────────────────────────────────────────
 
-ROUNDS = 20
-ENCODER_UNFREEZE_ROUND = 2
-FEDPROX_MU = 0.01
+ROUNDS               = 20
+LSTM_UNFREEZE_ROUND  = 2     # freeze lstm for first N rounds → train adapter only
+FEDPROX_MU           = 0.01
 
-dataset_sizes = [len(c.texts) for c in clients]
-total_samples = sum(dataset_sizes)
+dataset_sizes  = [len(c.texts) for c in clients]
+total_samples  = sum(dataset_sizes)
 client_weights = [s / total_samples for s in dataset_sizes]
 
 round_losses = []
-round_lrs = []
+round_lrs    = []
 
-print("Starting FedVoc training (adapter-only sharing, pretrained encoder)...")
+print("Starting FedVoc LSTM training (lstm + adapter sharing, no pretrained weights)...")
 
 for round_idx in range(ROUNDS):
     print(f"\n--- Round {round_idx} ---")
 
     for client in clients:
-        should_freeze = (round_idx < ENCODER_UNFREEZE_ROUND)
-        client.set_encoder_frozen(should_freeze)
+        should_freeze = (round_idx < LSTM_UNFREEZE_ROUND)
+        client.set_encoder_frozen(should_freeze)   # same API as FedVocClient
         client.initialize_shared_weights(global_shared)
 
-    shared_updates = []
+    shared_updates   = []
     total_round_loss = 0
 
     for client in clients:
@@ -93,6 +88,7 @@ for round_idx in range(ROUNDS):
         total_round_loss += loss
         shared_updates.append(client.get_shared_weights())
 
+    # Weighted aggregation
     new_shared = {}
     for key in global_shared:
         new_shared[key] = sum(
@@ -101,18 +97,17 @@ for round_idx in range(ROUNDS):
         )
     global_shared = new_shared
 
-    avg_loss = total_round_loss / len(clients)
-    round_losses.append(avg_loss)
+    round_losses.append(total_round_loss / len(clients))
 
     for client in clients:
         client.step_scheduler()
     round_lrs.append(clients[0].get_current_lr())
 
-print("\nFedVoc training complete.")
+print("\nFedVoc LSTM training complete.")
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
-print("\nEvaluating FedVoc...")
+print("\nEvaluating FedVoc LSTM...")
 eval_results = []
 
 for i, client in enumerate(clients):
@@ -138,13 +133,12 @@ for i, client in enumerate(clients):
 
 # Communication cost
 comm_cost = count_parameters(global_shared)
-print(f"\nFedVoc communication cost per round: {comm_cost:,} params")
-print(f"(FedAvg baseline was ~74,146,184 params — {74146184 // comm_cost}× reduction)")
+print(f"\nFedVoc LSTM communication cost per round: {comm_cost:,} params")
 
 # ── Save results for compare_results.py ───────────────────────────────────────
 
 os.makedirs("results", exist_ok=True)
-with open("results/fedvoc_results.json", "w") as f:
+with open("results/fedvoc_lstm_results.json", "w") as f:
     json.dump({
         "round_losses": round_losses,
         "round_lrs":    round_lrs,
@@ -153,13 +147,14 @@ with open("results/fedvoc_results.json", "w") as f:
         "oov_rates":    oov_rates,
         "comm_cost":    comm_cost,
     }, f, indent=2)
-print("Results saved to results/fedvoc_results.json")
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
 
+os.makedirs("results", exist_ok=True)
+
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 ax1.plot(round_losses)
-ax1.set_title("FedVoc convergence")
+ax1.set_title("FedVoc LSTM convergence")
 ax1.set_xlabel("Round")
 ax1.set_ylabel("Avg loss")
 
@@ -170,14 +165,13 @@ ax2.set_ylabel("LR")
 ax2.set_yscale("log")
 
 plt.tight_layout()
-plt.savefig("results/fedvoc_convergence.png")
+plt.savefig("results/fedvoc_lstm_convergence.png")
 plt.close()
-print("\nConvergence plot saved to results/fedvoc_convergence.png")
+print("Convergence plot saved to results/fedvoc_lstm_convergence.png")
 
 # ── Save models ───────────────────────────────────────────────────────────────
 
 os.makedirs("saved_models", exist_ok=True)
 for i, client in enumerate(clients):
-    torch.save(client.model.state_dict(), f"saved_models/fedvoc_client_{i}.pt")
-
-print("FedVoc client models saved.")
+    torch.save(client.model.state_dict(), f"saved_models/fedvoc_lstm_client_{i}.pt")
+print("FedVoc LSTM client models saved.")
