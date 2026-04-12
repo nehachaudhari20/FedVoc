@@ -6,47 +6,47 @@ from models.base_model import FedVocModel
 
 
 class FedAvgClient:
+    """
+    FedAvg baseline client.
+
+    Changes from original:
+    - Full dataset used per epoch (was capped at 3000 samples)
+    - Cosine LR scheduler support
+    - Pretrained encoder loaded at init for a fair comparison with FedVoc
+    """
+
     def __init__(self, tokenizer, texts, device=None):
         self.tokenizer = tokenizer
         self.texts = texts
-
-        # Device
         self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.vocab_size = tokenizer.get_vocab_size()
         self.model = FedVocModel(self.vocab_size).to(self.device)
-
         self.pad_id = tokenizer.token_to_id("[PAD]")
 
-        # ✅ optimizer defined once
         self.optimizer = optim.Adam(self.model.parameters(), lr=3e-4)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=20, eta_min=1e-5
+        )
 
     def initialize_local_model(self, global_model):
         self.model.load_state_dict(global_model.state_dict())
 
     def _prepare_batch(self, texts, max_len=80):
         input_ids_list = []
-
         for text in texts:
             ids = self.tokenizer.encode(text).ids[:max_len]
             if len(ids) < 2:
                 continue
             input_ids_list.append(torch.tensor(ids))
 
-        if len(input_ids_list) == 0:
+        if not input_ids_list:
             return None, None, None
 
-        padded = pad_sequence(
-            input_ids_list,
-            batch_first=True,
-            padding_value=self.pad_id
-        )
-
+        padded = pad_sequence(input_ids_list, batch_first=True, padding_value=self.pad_id)
         attention_mask = (padded != self.pad_id).long()
-
         inputs = padded[:, :-1]
         targets = padded[:, 1:]
-
         return inputs, targets, attention_mask[:, :-1]
 
     def train_one_epoch(self, batch_size=16):
@@ -60,8 +60,8 @@ class FedAvgClient:
         total_loss = 0
         steps = 0
 
-        for i in range(0, min(len(self.texts), 3000), batch_size):
-
+        # FIX: use full dataset
+        for i in range(0, len(self.texts), batch_size):
             batch_texts = self.texts[i:i + batch_size]
             inputs, targets, mask = self._prepare_batch(batch_texts)
 
@@ -73,14 +73,11 @@ class FedAvgClient:
             mask = mask.to(self.device)
 
             self.optimizer.zero_grad()
-
             logits = self.model(inputs, mask)
-
             loss = criterion(
                 logits.reshape(-1, self.vocab_size),
                 targets.reshape(-1)
             )
-
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.optimizer.step()
@@ -89,6 +86,9 @@ class FedAvgClient:
             steps += 1
 
         return total_loss / max(steps, 1)
+
+    def step_scheduler(self):
+        self.scheduler.step()
 
     def get_model_weights(self):
         return self.model.state_dict()
@@ -106,7 +106,6 @@ class FedAvgClient:
 
         with torch.no_grad():
             for i in range(0, len(test_texts), batch_size):
-
                 batch_texts = test_texts[i:i + batch_size]
                 inputs, targets, mask = self._prepare_batch(batch_texts)
 
@@ -118,7 +117,6 @@ class FedAvgClient:
                 mask = mask.to(self.device)
 
                 logits = self.model(inputs, mask)
-
                 loss = criterion(
                     logits.reshape(-1, self.vocab_size),
                     targets.reshape(-1)
@@ -129,5 +127,4 @@ class FedAvgClient:
 
         avg_loss = total_loss / max(steps, 1)
         perplexity = torch.exp(torch.tensor(avg_loss)).item()
-
         return avg_loss, perplexity
