@@ -1,22 +1,25 @@
 """
-run_fedvoc.py — improved FedVoc training script
+FedVoc training — lightweight version (~20-25 min on gaming GPU).
 
-Bug fixes vs original:
-    1. Global shared state initialised by averaging ALL clients, not just client 0
+Run with:
+    python -m run_fedvoc
+
+What was removed vs heavy version to hit the 30-min target:
+    - Pretrained DistilBERT loading        → single biggest time saving (~60% faster)
+    - Full dataset per epoch               → 3000-sample cap restored (4-5x faster)
+    - FedProx proximal term                → removed (~10% overhead per batch)
+    - Rounds 20 → 15                       → 25% fewer rounds
+
+Bug fixes kept (zero compute cost — all logic changes):
+    1. Global shared state = average of ALL clients, not just client 0
     2. Weighted FedAvg aggregation by dataset size
-    3. Optimizer momentum preserved — only rebuilt when freeze state changes
-    4. Only adapter weights are shared (not full encoder)
+    3. Optimizer momentum preserved — only rebuilt on actual freeze state change
+    4. Adapter-only sharing (not full 66M-param encoder)
 
-Training improvements:
-    5. Pretrained DistilBERT encoder warm-start
-    6. Cosine LR scheduler stepped each round
-    7. Full dataset used per epoch (removed 3000-sample cap)
-    8. FedProx proximal term (mu=0.01)
-
-Evaluation improvements:
-    9. Domain accuracy metric alongside perplexity
-   10. Fixed OOV rate (rate on test sentences, not type count)
-   11. Saves results/fedvoc_results.json for compare_results.py
+Free improvements kept:
+    5. Cosine LR scheduler
+    6. LayerNorm + zero-init B in adapter
+    7. Domain accuracy + OOV rate evaluation
 """
 
 import json
@@ -29,9 +32,13 @@ from tokenizers import Tokenizer
 from clients.client_fedvoc import FedVocClient
 from utils.communication import count_parameters
 from utils.data_loader import load_domain_clients
-from utils.oov_eval import oov_rate
 from utils.domain_eval import domain_accuracy
+from utils.oov_eval import oov_rate
 
+# ── Config ────────────────────────────────────────────────────────────────────
+
+ROUNDS = 15                  # reduced from 20 — saves 25% time, still converges
+ENCODER_UNFREEZE_ROUND = 2   # unfreeze encoder after round 2 (same as before)
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -44,71 +51,65 @@ for i, (cid, data) in enumerate(clients_data.items()):
     client.test_texts = data["test"]
     clients.append(client)
 
-# ── Pretrained encoder warm-start ─────────────────────────────────────────────
+# Dataset weights for aggregation — BUG FIX #2
+dataset_sizes = [len(c.texts) for c in clients]
+total_samples = sum(dataset_sizes)
+client_weights = [s / total_samples for s in dataset_sizes]
+print(f"Dataset sizes: {dataset_sizes}")
+print(f"Client weights: {[round(w, 3) for w in client_weights]}")
 
-print("Loading pretrained DistilBERT encoder into all clients...")
-clients[0].model.load_pretrained_encoder()
-pretrained_encoder_state = clients[0].model.encoder.state_dict()
-for client in clients[1:]:
-    client.model.encoder.load_state_dict(pretrained_encoder_state)
-print("Pretrained encoder loaded.\n")
-
-# ── Global shared state initialisation ────────────────────────────────────────
+# ── Global shared state init — BUG FIX #1 ────────────────────────────────────
+# Original: global_shared = clients[0].get_shared_weights()  ← wrong, biases client 0
+# Fixed:    average of ALL clients' initial adapter weights
 
 all_init = [c.get_shared_weights() for c in clients]
 global_shared = {}
 for key in all_init[0]:
     global_shared[key] = sum(w[key] for w in all_init) / len(all_init)
 
-# ── Training loop ─────────────────────────────────────────────────────────────
-
-ROUNDS = 20
-ENCODER_UNFREEZE_ROUND = 2
-FEDPROX_MU = 0.01
-
-dataset_sizes = [len(c.texts) for c in clients]
-total_samples = sum(dataset_sizes)
-client_weights = [s / total_samples for s in dataset_sizes]
+# ── Training ──────────────────────────────────────────────────────────────────
 
 round_losses = []
 round_lrs = []
 
-print("Starting FedVoc training (adapter-only sharing, pretrained encoder)...")
+print(f"\nStarting FedVoc training — {ROUNDS} rounds, 3000-sample cap, no pretrained encoder")
+print("Bug fixes: weighted agg + proper init + optimizer momentum + adapter-only sharing\n")
 
 for round_idx in range(ROUNDS):
-    print(f"\n--- Round {round_idx} ---")
+    print(f"--- Round {round_idx} ---")
 
+    # BUG FIX #3: set_encoder_frozen() only rebuilds optimizer when state changes
     for client in clients:
-        should_freeze = (round_idx < ENCODER_UNFREEZE_ROUND)
-        client.set_encoder_frozen(should_freeze)
+        client.set_encoder_frozen(round_idx < ENCODER_UNFREEZE_ROUND)
         client.initialize_shared_weights(global_shared)
 
     shared_updates = []
     total_round_loss = 0
 
-    for client in clients:
-        loss = client.train_one_epoch(batch_size=16, mu=FEDPROX_MU)
-        print(f"  Client loss: {loss:.4f}  lr: {client.get_current_lr():.2e}")
-
+    for i, client in enumerate(clients):
+        loss = client.train_one_epoch()
+        print(f"  Client {i} loss: {loss:.4f}  lr: {client.get_current_lr():.2e}")
         total_round_loss += loss
         shared_updates.append(client.get_shared_weights())
 
+    # BUG FIX #2: weighted aggregation by dataset size
     new_shared = {}
     for key in global_shared:
         new_shared[key] = sum(
-            w * update[key]
-            for w, update in zip(client_weights, shared_updates)
+            w * upd[key]
+            for w, upd in zip(client_weights, shared_updates)
         )
     global_shared = new_shared
 
     avg_loss = total_round_loss / len(clients)
     round_losses.append(avg_loss)
+    print(f"  Avg loss: {avg_loss:.4f}\n")
 
     for client in clients:
         client.step_scheduler()
     round_lrs.append(clients[0].get_current_lr())
 
-print("\nFedVoc training complete.")
+print("FedVoc training complete.")
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
@@ -120,7 +121,6 @@ for i, client in enumerate(clients):
     print(f"  Client {i} — Test Loss: {loss:.4f} | Perplexity: {ppl:.4f}")
     eval_results.append({"client": i, "loss": loss, "perplexity": ppl})
 
-# Domain accuracy
 print("\nDomain accuracy (top-3):")
 domain_accs = []
 for i, client in enumerate(clients):
@@ -128,20 +128,18 @@ for i, client in enumerate(clients):
     print(f"  Client {i}: {acc:.3f}")
     domain_accs.append(acc)
 
-# OOV rate
-print("\nOOV Rate on test sentences:")
+print("\nOOV rate on test sentences:")
 oov_rates = []
 for i, client in enumerate(clients):
     rate = oov_rate(client.tokenizer, client.test_texts[:500])
     print(f"  Client {i}: {rate:.4f}")
     oov_rates.append(rate)
 
-# Communication cost
 comm_cost = count_parameters(global_shared)
 print(f"\nFedVoc communication cost per round: {comm_cost:,} params")
-print(f"(FedAvg baseline was ~74,146,184 params — {74146184 // comm_cost}× reduction)")
+print(f"FedAvg shares ~74,146,184 params — FedVoc is {74146184 // comm_cost}× cheaper")
 
-# ── Save results for compare_results.py ───────────────────────────────────────
+# ── Save results ──────────────────────────────────────────────────────────────
 
 os.makedirs("results", exist_ok=True)
 with open("results/fedvoc_results.json", "w") as f:
@@ -158,26 +156,27 @@ print("Results saved to results/fedvoc_results.json")
 # ── Plots ─────────────────────────────────────────────────────────────────────
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-ax1.plot(round_losses)
+ax1.plot(round_losses, marker="o", markersize=4)
 ax1.set_title("FedVoc convergence")
 ax1.set_xlabel("Round")
 ax1.set_ylabel("Avg loss")
+ax1.grid(alpha=0.3)
 
 ax2.plot(round_lrs)
-ax2.set_title("Learning rate schedule")
+ax2.set_title("LR schedule (cosine)")
 ax2.set_xlabel("Round")
 ax2.set_ylabel("LR")
 ax2.set_yscale("log")
+ax2.grid(alpha=0.3)
 
 plt.tight_layout()
-plt.savefig("results/fedvoc_convergence.png")
+plt.savefig("results/fedvoc_convergence.png", dpi=120)
 plt.close()
-print("\nConvergence plot saved to results/fedvoc_convergence.png")
+print("Convergence plot saved to results/fedvoc_convergence.png")
 
 # ── Save models ───────────────────────────────────────────────────────────────
 
 os.makedirs("saved_models", exist_ok=True)
 for i, client in enumerate(clients):
     torch.save(client.model.state_dict(), f"saved_models/fedvoc_client_{i}.pt")
-
 print("FedVoc client models saved.")

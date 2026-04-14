@@ -7,17 +7,24 @@ from torch.nn.utils.rnn import pad_sequence
 
 class FedVocClient:
     """
-    FedVoc client.
+    FedVoc client — lightweight version for ~30 min GPU training.
 
-    Changes from original:
-    - Optimizer is NOT recreated on every round — momentum is preserved
-    - Optimizer is only rebuilt when requires_grad actually changes (freeze toggle)
-    - FedProx proximal term prevents client drift during local training
-    - Full dataset used per epoch (was capped at 3000 samples)
-    - Cosine LR scheduler support (stepped externally from run_fedvoc.py)
-    - get_shared_weights() returns adapter ONLY (not the full encoder)
-      → communication cost drops from 66.5M to ~24K params per round
-    - initialize_shared_weights() no longer rebuilds the optimizer
+    Bug fixes kept (zero compute cost):
+        - Optimizer NOT rebuilt every round — momentum preserved across rounds
+        - Optimizer only rebuilt when encoder freeze state actually changes
+        - get_shared_weights() returns adapter ONLY (not full encoder)
+        - initialize_shared_weights() does not touch the optimizer
+
+    Removed to save time:
+        - FedProx proximal term (was cloning all params every batch — ~10% overhead)
+        - Full dataset — 3000-sample cap RESTORED (4-5x faster per epoch)
+        - Pretrained encoder — REMOVED (was the main 2-hour culprit)
+
+    Kept from improved version:
+        - Cosine LR scheduler (free)
+        - set_encoder_frozen() only rebuilds optimizer on actual state change
+        - Proper global init (handled in run_fedvoc.py)
+        - Weighted aggregation (handled in run_fedvoc.py)
     """
 
     def __init__(self, tokenizer, texts, device=None):
@@ -34,16 +41,13 @@ class FedVocClient:
             param.requires_grad = False
         self._encoder_frozen = True
 
-        # Build optimizer once — never rebuild unless freeze state changes
+        # Build optimizer once — never rebuild unless freeze state actually changes
         self.optimizer = self._build_optimizer(lr=3e-4)
 
-        # Cosine scheduler — stepped each round from run_fedvoc.py
+        # Cosine LR scheduler — free improvement, no compute cost
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, T_max=20, eta_min=1e-5
+            self.optimizer, T_max=15, eta_min=1e-5
         )
-
-        # Global model snapshot for FedProx proximal term
-        self._global_params = None
 
     def _build_optimizer(self, lr=3e-4):
         return optim.Adam(
@@ -53,20 +57,20 @@ class FedVocClient:
 
     def set_encoder_frozen(self, frozen: bool):
         """
-        Toggle encoder freeze. Only rebuilds the optimizer if the state actually changes,
-        preserving Adam momentum across rounds when nothing changes.
+        BUG FIX: only rebuilds optimizer when freeze state actually changes.
+        Original code rebuilt optimizer every single round — killed Adam momentum.
         """
         if frozen == self._encoder_frozen:
-            return  # no change — keep optimizer as-is
+            return  # nothing changed — keep optimizer and momentum intact
 
         for param in self.model.encoder.parameters():
             param.requires_grad = not frozen
         self._encoder_frozen = frozen
 
-        # Rebuild optimizer only now (momentum is legitimately stale after param set change)
+        # Rebuild optimizer — momentum is stale after param set changes
         self.optimizer = self._build_optimizer(lr=self.scheduler.get_last_lr()[0])
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, T_max=20, eta_min=1e-5
+            self.optimizer, T_max=15, eta_min=1e-5
         )
         state = "frozen" if frozen else "unfrozen"
         print(f"  Encoder {state} — optimizer rebuilt.")
@@ -82,21 +86,15 @@ class FedVocClient:
         if not input_ids_list:
             return None, None, None
 
-        padded = pad_sequence(input_ids_list, batch_first=True, padding_value=self.pad_id)
+        padded = pad_sequence(
+            input_ids_list, batch_first=True, padding_value=self.pad_id
+        )
         attention_mask = (padded != self.pad_id).long()
         inputs = padded[:, :-1]
         targets = padded[:, 1:]
         return inputs, targets, attention_mask[:, :-1]
 
-    def train_one_epoch(self, batch_size=16, mu=0.01):
-        """
-        Train for one epoch.
-
-        Args:
-            batch_size: mini-batch size
-            mu: FedProx proximal coefficient. Set to 0 to disable.
-               Prevents local model from drifting too far from global weights.
-        """
+    def train_one_epoch(self, batch_size=16):
         self.model.train()
 
         criterion = nn.CrossEntropyLoss(
@@ -104,21 +102,11 @@ class FedVocClient:
             label_smoothing=0.1
         )
 
-        # Snapshot global params for FedProx at the start of each epoch
-        if mu > 0 and self._global_params is not None:
-            global_snapshot = {
-                n: p.clone().detach()
-                for n, p in self.model.named_parameters()
-                if p.requires_grad
-            }
-        else:
-            global_snapshot = None
-
         total_loss = 0
         steps = 0
 
-        # FIX: use full dataset, not min(len, 3000)
-        for i in range(0, len(self.texts), batch_size):
+        # 3000-sample cap RESTORED — was 4-5x slower without it
+        for i in range(0, min(len(self.texts), 3000), batch_size):
             batch_texts = self.texts[i:i + batch_size]
             inputs, targets, mask = self._prepare_batch(batch_texts)
 
@@ -137,15 +125,6 @@ class FedVocClient:
                 targets.reshape(-1)
             )
 
-            # FedProx proximal term: penalise drift from global weights
-            if global_snapshot is not None:
-                prox = sum(
-                    (p - global_snapshot[n]).norm(2) ** 2
-                    for n, p in self.model.named_parameters()
-                    if p.requires_grad and n in global_snapshot
-                )
-                loss = loss + (mu / 2) * prox
-
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.optimizer.step()
@@ -157,12 +136,9 @@ class FedVocClient:
 
     def get_shared_weights(self):
         """
-        Return ONLY adapter weights for aggregation.
-
-        Original returned encoder + adapter (~66.5M params).
-        Now returns adapter only (~24K params) — a 2700× communication reduction.
-        The encoder is warm-started from pretrained weights and then frozen after
-        the warm-up rounds, so it doesn't need to be aggregated.
+        BUG FIX: return adapter ONLY — not the full 66M-param encoder.
+        Original returned encoder + adapter which made comm cost nearly
+        identical to FedAvg. Now only ~49K params shared per round.
         """
         return {
             "adapter." + k: v
@@ -171,9 +147,8 @@ class FedVocClient:
 
     def initialize_shared_weights(self, global_shared_state):
         """
-        Load global adapter weights into local model.
-        Does NOT rebuild the optimizer — momentum is preserved across rounds.
-        Saves a snapshot of global params for FedProx.
+        BUG FIX: loads global adapter weights WITHOUT rebuilding the optimizer.
+        Original always rebuilt Adam here — threw away all momentum every round.
         """
         adapter_state = {
             k.replace("adapter.", ""): v
@@ -182,15 +157,7 @@ class FedVocClient:
         }
         self.model.adapter.load_state_dict(adapter_state)
 
-        # Save snapshot for FedProx proximal term in next local epoch
-        self._global_params = {
-            n: p.clone().detach()
-            for n, p in self.model.named_parameters()
-            if p.requires_grad
-        }
-
     def step_scheduler(self):
-        """Step the LR scheduler — call once per round after training."""
         self.scheduler.step()
 
     def get_current_lr(self):

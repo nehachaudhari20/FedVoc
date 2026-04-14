@@ -1,12 +1,17 @@
 """
-run_fedavg.py — improved FedAvg baseline
+FedAvg baseline training — lightweight version (~20-25 min on gaming GPU).
 
-Changes vs original:
-    1. Pretrained DistilBERT encoder loaded for fair comparison with FedVoc
-    2. Full dataset used per epoch (removed 3000-sample cap)
-    3. Cosine LR scheduler stepped each round
-    4. Weighted aggregation by dataset size (same as FedVoc)
-    5. Saves results/fedavg_results.json for compare_results.py
+Run with:
+    python -m run_fedavg
+
+What was removed vs heavy version:
+    - Pretrained DistilBERT loading  → biggest time saving
+    - Full dataset                   → 3000-sample cap restored
+    - Rounds 20 → 15
+
+Improvements kept (zero compute cost):
+    1. Weighted FedAvg aggregation by dataset size (was uniform — biased results)
+    2. Cosine LR scheduler
 """
 
 import json
@@ -21,6 +26,9 @@ from server.server_base import Server
 from utils.communication import count_parameters
 from utils.data_loader import load_domain_clients
 
+# ── Config ────────────────────────────────────────────────────────────────────
+
+ROUNDS = 15
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -36,47 +44,43 @@ for cid, data in clients_data.items():
     client.test_texts = data["test"]
     clients.append(client)
 
-# Dataset sizes for weighted aggregation
+# Dataset weights for weighted aggregation — BUG FIX
 dataset_sizes = [len(c.texts) for c in clients]
 total_samples = sum(dataset_sizes)
 client_weights = [s / total_samples for s in dataset_sizes]
+print(f"Dataset sizes: {dataset_sizes}")
+print(f"Client weights: {[round(w, 3) for w in client_weights]}")
 
-# ── Pretrained encoder warm-start ─────────────────────────────────────────────
+# ── Training ──────────────────────────────────────────────────────────────────
 
-print("Loading pretrained DistilBERT into FedAvg server model...")
-server.global_model.load_pretrained_encoder()
-print("Pretrained encoder loaded.\n")
-
-# ── Training loop ─────────────────────────────────────────────────────────────
-
-ROUNDS = 20
 round_losses = []
 
-print("Starting FedAvg training...")
+print(f"\nStarting FedAvg training — {ROUNDS} rounds, 3000-sample cap, no pretrained encoder\n")
 
 for round_idx in range(ROUNDS):
-    print(f"\n--- Round {round_idx} ---")
+    print(f"--- Round {round_idx} ---")
 
     client_weight_list = []
     total_round_loss = 0
 
-    for client in clients:
+    for i, client in enumerate(clients):
         client.initialize_local_model(server.global_model)
         loss = client.train_one_epoch()
-        print(f"  Client train loss: {loss:.4f}  lr: {client.scheduler.get_last_lr()[0]:.2e}")
-
+        print(f"  Client {i} train loss: {loss:.4f}  lr: {client.scheduler.get_last_lr()[0]:.2e}")
         total_round_loss += loss
         client_weight_list.append(client.get_model_weights())
 
-    # Weighted aggregation
+    # Weighted aggregation — BUG FIX
     server.aggregate(client_weight_list, client_weights)
 
-    round_losses.append(total_round_loss / len(clients))
+    avg_loss = total_round_loss / len(clients)
+    round_losses.append(avg_loss)
+    print(f"  Avg loss: {avg_loss:.4f}\n")
 
     for client in clients:
         client.step_scheduler()
 
-print("\nFedAvg training complete.")
+print("FedAvg training complete.")
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
@@ -92,7 +96,7 @@ for i, client in enumerate(clients):
 comm_cost = count_parameters(server.global_model.state_dict())
 print(f"\nFedAvg communication cost per round: {comm_cost:,} params")
 
-# ── Save results for compare_results.py ───────────────────────────────────────
+# ── Save results ──────────────────────────────────────────────────────────────
 
 os.makedirs("results", exist_ok=True)
 with open("results/fedavg_results.json", "w") as f:
@@ -103,17 +107,19 @@ with open("results/fedavg_results.json", "w") as f:
     }, f, indent=2)
 print("Results saved to results/fedavg_results.json")
 
-# ── Plots ─────────────────────────────────────────────────────────────────────
+# ── Plot ──────────────────────────────────────────────────────────────────────
 
-plt.plot(round_losses)
+plt.plot(round_losses, marker="o", markersize=4)
 plt.title("FedAvg convergence")
 plt.xlabel("Round")
 plt.ylabel("Avg loss")
-plt.savefig("results/fedavg_convergence.png")
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig("results/fedavg_convergence.png", dpi=120)
 plt.close()
 print("Convergence plot saved to results/fedavg_convergence.png")
 
-# ── Save models ───────────────────────────────────────────────────────────────
+# ── Save model ────────────────────────────────────────────────────────────────
 
 os.makedirs("saved_models", exist_ok=True)
 torch.save(server.global_model.state_dict(), "saved_models/fedavg_model.pt")

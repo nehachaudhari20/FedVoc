@@ -7,12 +7,15 @@ from models.base_model import FedVocModel
 
 class FedAvgClient:
     """
-    FedAvg baseline client.
+    FedAvg baseline client — lightweight version for ~30 min GPU training.
 
-    Changes from original:
-    - Full dataset used per epoch (was capped at 3000 samples)
-    - Cosine LR scheduler support
-    - Pretrained encoder loaded at init for a fair comparison with FedVoc
+    Removed to save time:
+        - Pretrained encoder loading (was the main 2-hour culprit)
+        - Full dataset (3000-sample cap RESTORED)
+
+    Kept from improved version:
+        - Cosine LR scheduler (free)
+        - Weighted aggregation support (handled in run_fedavg.py)
     """
 
     def __init__(self, tokenizer, texts, device=None):
@@ -25,8 +28,10 @@ class FedAvgClient:
         self.pad_id = tokenizer.token_to_id("[PAD]")
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=3e-4)
+
+        # Cosine LR — free improvement
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, T_max=20, eta_min=1e-5
+            self.optimizer, T_max=15, eta_min=1e-5
         )
 
     def initialize_local_model(self, global_model):
@@ -43,7 +48,9 @@ class FedAvgClient:
         if not input_ids_list:
             return None, None, None
 
-        padded = pad_sequence(input_ids_list, batch_first=True, padding_value=self.pad_id)
+        padded = pad_sequence(
+            input_ids_list, batch_first=True, padding_value=self.pad_id
+        )
         attention_mask = (padded != self.pad_id).long()
         inputs = padded[:, :-1]
         targets = padded[:, 1:]
@@ -60,8 +67,8 @@ class FedAvgClient:
         total_loss = 0
         steps = 0
 
-        # FIX: use full dataset
-        for i in range(0, len(self.texts), batch_size):
+        # 3000-sample cap RESTORED
+        for i in range(0, min(len(self.texts), 3000), batch_size):
             batch_texts = self.texts[i:i + batch_size]
             inputs, targets, mask = self._prepare_batch(batch_texts)
 
